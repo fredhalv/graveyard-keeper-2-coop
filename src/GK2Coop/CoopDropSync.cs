@@ -177,6 +177,10 @@ namespace GK2Coop
                     return;
                 }
                 var position = (Vector3)rawPos;
+                // A new drop can carry an id this session already finished: organs taken out of a
+                // body keep their item's id, and so does a carried body put down again. Peers
+                // ignored it and the host turned every pickup of it down, so it hung in the air.
+                bool redrop = completedPickups.Remove(uniqueId) | mirrored.Remove(uniqueId);
 
                 byte[] whole = WholeItem(item);
                 byte[] zombie = ZombieOf(item);
@@ -192,6 +196,7 @@ namespace GK2Coop
                     writer.WriteValueSafe(new FixedString128Bytes(CoopWorldSync.LocalDeathOrigin ?? string.Empty));
                     WriteBlob(writer, whole);
                     WriteBlob(writer, zombie);
+                    writer.WriteValueSafe(redrop);
                     Broadcast(netcode, SpawnMessage, writer);
                 }
                 spawnsSent++;
@@ -391,6 +396,12 @@ namespace GK2Coop
                 // 0.65.7 on: the whole item and, for a zombie, the zombie (absent from older peers).
                 byte[] whole = ReadBlob(ref reader);
                 byte[] zombie = ReadBlob(ref reader);
+                // Fork: a drop made again under an id this session already finished.
+                bool redrop = false;
+                if (reader.Position < reader.Length)
+                {
+                    reader.ReadValueSafe(out redrop);
+                }
 
                 string key = uniqueId.ToString();
                 // Not yet in a world (connected in the main menu to copy it): the drop cannot be made here,
@@ -399,6 +410,11 @@ namespace GK2Coop
                 if (!InWorld())
                 {
                     return;
+                }
+                if (redrop)
+                {
+                    completedPickups.Remove(key);
+                    mirrored.Remove(key);
                 }
                 if (!mirrored.Add(key) || completedPickups.Contains(key))
                 {
@@ -438,6 +454,7 @@ namespace GK2Coop
                         writer.WriteValueSafe(origin);
                         WriteBlob(writer, whole);
                         WriteBlob(writer, zombie);
+                        writer.WriteValueSafe(redrop);
                         foreach (ulong clientId in netcode.ConnectedClientsIds)
                         {
                             if (clientId != netcode.LocalClientId && clientId != senderClientId)
@@ -557,6 +574,7 @@ namespace GK2Coop
             harvests.Clear();
             mirrored.Clear();
             completedPickups.Clear();
+            awaitingPickup.Clear();
         }
 
         private static void SpawnMirrored(string uniqueId, string itemId, int count, string worldId, Vector3 position, byte[] whole = null, byte[] zombie = null)
@@ -640,15 +658,19 @@ namespace GK2Coop
                 {
                     return true;
                 }
+                object view = __args != null && __args.Length > 0 ? __args[0] : null;
                 if (netcode.IsHost)
                 {
-                    TryHostPickup(netcode.LocalClientId, uniqueId, -1);
+                    if (!TryHostPickup(netcode.LocalClientId, uniqueId, -1))
+                    {
+                        StopPulling(view);
+                    }
                 }
                 else
                 {
                     // The joiner's own bag says how much fits; the host's copy of it can be behind,
                     // and a pickup the host granted beyond it was lost (`mix` phase 2c).
-                    int room = LocalRoomFor(__args != null && __args.Length > 0 ? __args[0] : null);
+                    int room = LocalRoomFor(view);
                     if (roomNotes++ < 12) log.LogInfo("Drop pickup " + Shorten(uniqueId) + ": the own bag takes " + (room == int.MaxValue ? "all (resource)" : room < 0 ? "an unknown amount" : room.ToString()) + ".");
                     if (room == 0)
                     {
@@ -656,7 +678,12 @@ namespace GK2Coop
                         {
                             log.LogInfo("Drop pickup: no room in the bag; the drop stays where it is.");
                         }
+                        StopPulling(view);
                         return false;
+                    }
+                    if (view is DropView dropView)
+                    {
+                        awaitingPickup[uniqueId] = dropView;
                     }
                     SendPickupRequest(netcode, uniqueId, room);
                 }
@@ -672,6 +699,23 @@ namespace GK2Coop
 
         private static int fullBagNotes;
         private static int roomNotes;
+
+        /// <summary>A joiner's drops on their way to its bag, until the host answers.</summary>
+        private static readonly Dictionary<string, DropView> awaitingPickup = new Dictionary<string, DropView>();
+
+        /// <summary>
+        /// A pickup that was turned down: as the game does for a full bag, the drop stops flying
+        /// to the player and lands, and is not pulled in again until the player has walked away.
+        /// Without it the drop hung in the air at the player, asking again every physics frame.
+        /// </summary>
+        private static void StopPulling(object view)
+        {
+            if (view is DropView dropView && dropView != null && dropView.Data != null)
+            {
+                dropView.BlockAutoCollect();
+                dropView.StopMoving();
+            }
+        }
 
         /// <summary>
         /// How much of a drop the local player's own bag takes: all of a resource drop, -1 when it
@@ -747,12 +791,12 @@ namespace GK2Coop
             }
         }
 
-        private static void TryHostPickup(ulong actorClientId, string uniqueId, int joinerRoom)
+        private static bool TryHostPickup(ulong actorClientId, string uniqueId, int joinerRoom)
         {
             NetworkManager netcode = NetworkManager.Singleton;
             if (netcode == null || !netcode.IsHost || string.IsNullOrEmpty(uniqueId))
             {
-                return;
+                return false;
             }
 
             object drop = FindDrop(uniqueId);
@@ -763,7 +807,7 @@ namespace GK2Coop
             {
                 pickupRejected++;
                 SendPickupResult(netcode, actorClientId, uniqueId, itemId, 0, remaining, false);
-                return;
+                return false;
             }
 
             object playerData = ResolvePlayerData(actorClientId);
@@ -789,7 +833,7 @@ namespace GK2Coop
                 pickupRejected++;
                 SendPickupResult(netcode, actorClientId, uniqueId, itemId, 0, remaining, false);
                 Detail("Host rejected pickup " + Shorten(uniqueId) + " for client " + actorClientId + ".");
-                return;
+                return false;
             }
 
             remaining -= accepted;
@@ -807,6 +851,7 @@ namespace GK2Coop
             SendPickupResult(netcode, actorClientId, uniqueId, itemId, accepted, remaining, true);
             Detail("Host accepted pickup " + Shorten(uniqueId) + " for client " + actorClientId +
                    ": " + itemId + " x" + accepted + ", remaining=" + remaining + ".");
+            return true;
         }
 
         private static void SendPickupResult(NetworkManager netcode, ulong actorClientId, string uniqueId,
@@ -855,6 +900,14 @@ namespace GK2Coop
 
                 string key = uniqueId.ToString();
                 string awardedItemId = itemId.ToString();
+                if (actorClientId == (int)netcode.LocalClientId && awaitingPickup.TryGetValue(key, out DropView requested))
+                {
+                    awaitingPickup.Remove(key);
+                    if (!success)
+                    {
+                        StopPulling(requested);
+                    }
+                }
                 object localPlayerData = CoopDiagnostics.GetStatic(Plugin.FindGameType("MainGame"), "PlayerData");
                 bool mine = success && actorClientId == (int)netcode.LocalClientId && accepted > 0;
                 // Where the drop lay (it is removed below): what does not fit goes back there.
