@@ -241,9 +241,27 @@ namespace GK2Coop
 
         // ------------------------------------------------------------------ joiner side
 
+        /// <summary>
+        /// Dismantling (and cancelling it) runs on the dismantling player's machine, as a station
+        /// being dismantled is not shared; craft-end sync tells the others when it is gone. Asked
+        /// before the destroy craft is current, the station still looked shared, so the joiner sent
+        /// it to the host instead: the host then unshared the station and turned down every later
+        /// request for it, and the joiner's copy never went away.
+        /// </summary>
+        private static bool IsDestroyCraft(object component, object craftElement)
+        {
+            object def = craftElement == null ? null : CoopDiagnostics.GetMember(craftElement, "Def");
+            if (def == null || !Convert.ToBoolean(CoopDiagnostics.GetMember(def, "isObjDestroyCraft")))
+            {
+                return false;
+            }
+            classified.Remove(component);
+            return true;
+        }
+
         private static bool AddToQueuePrefix(object __instance, object craftElement, bool addToQueueTop, int queueIdx, ref object __result)
         {
-            if (!JoinerMustForward(__instance, out object wgo))
+            if (IsDestroyCraft(__instance, craftElement) || !JoinerMustForward(__instance, out object wgo))
             {
                 return true;
             }
@@ -256,7 +274,7 @@ namespace GK2Coop
 
         private static bool RemoveFromQueuePrefix(object __instance, object craftElement, bool removeEvenIfStarted)
         {
-            if (!JoinerMustForward(__instance, out object wgo))
+            if (IsDestroyCraft(__instance, craftElement) || !JoinerMustForward(__instance, out object wgo))
             {
                 return true;
             }

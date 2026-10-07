@@ -97,7 +97,8 @@ namespace GK2Coop
                 return;
             }
             object component = CoopDiagnostics.GetMember(__instance, "CraftComponent");
-            if (component != null && CoopCraftSync.IsShared(component))
+            // A finished dismantle removes the object, which the host's station state cannot carry.
+            if (component != null && CoopCraftSync.IsShared(component) && !Convert.ToBoolean(CoopDiagnostics.GetMember(def, "isObjDestroyCraft")))
             {
                 return;
             }
