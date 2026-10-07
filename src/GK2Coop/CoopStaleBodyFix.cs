@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using BepInEx.Logging;
 using HarmonyLib;
+using LazyBearTechnology;
 using UnityEngine;
 
 namespace GK2Coop
@@ -114,10 +115,24 @@ namespace GK2Coop
             return false;
         }
 
+        private static int remoteControlChangesSkipped;
+
         private static bool Prefix(object __instance, MethodBase __originalMethod)
         {
             if (__instance is UnityEngine.Object unityObject && unityObject != null)
             {
+                // A live remote body hears the local player's control changes too, and resetting
+                // its interaction ran its overlap check where it stands (often on the local
+                // player): it entered and left the same objects and overwrote their one shared
+                // interactor, so the local interact key could stop working.
+                if (__originalMethod.Name == "OnPlayerControlStateChanged" && !IsLocal(__instance))
+                {
+                    if (remoteControlChangesSkipped++ == 0)
+                    {
+                        log.LogInfo("Stale body fix: another player's body no longer reacts to the local player's control changes.");
+                    }
+                    return false;
+                }
                 return true;
             }
             try
@@ -131,6 +146,40 @@ namespace GK2Coop
                 log.LogWarning("Stale body fix: could not unsubscribe a departed body: " + ex.Message);
             }
             return false;
+        }
+
+        private static bool IsLocal(object component)
+        {
+            PlayerController local = MainGame.Instance == null ? null : MainGame.PlayerController;
+            return local == null || ReferenceEquals(local.PlayerInteractionComponent, component);
+        }
+
+        /// <summary>
+        /// After another player's body is made or taken away: every body's view points the game's
+        /// listener (<c>Microphone</c>) at itself when it is set up, so sound followed the other
+        /// player and was left on a destroyed body. The listener goes back to the local player,
+        /// and, when a body left, the local interaction is looked up again.
+        /// </summary>
+        internal static void RestoreLocalPlayer(bool resetInteraction)
+        {
+            try
+            {
+                PlayerController local = MainGame.Instance == null ? null : MainGame.PlayerController;
+                PlayerView view = local == null || local.PhysicalBody == null ? null : local.PhysicalBody.PlayerView;
+                if (view == null)
+                {
+                    return;
+                }
+                LazySingleton<global::Microphone>.Instance.SetTarget(view.transform);
+                if (resetInteraction)
+                {
+                    local.PlayerInteractionComponent?.ResetInteractionState();
+                }
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning("Stale body fix: could not restore the local player: " + ex.Message);
+            }
         }
 
         private static void Unsubscribe(object component)

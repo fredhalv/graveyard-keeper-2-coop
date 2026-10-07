@@ -1976,10 +1976,13 @@ namespace GK2Coop
                 {
                     if (ReferenceEquals(GetInstanceMember(body, "playerData"), playerData))
                     {
+                        // What the body's view subscribed to when it was set up (the fight state).
+                        try { (body as PlayerPhysicalBody)?.UnPrepareFromGame(); } catch (Exception ex) { Logger.LogWarning("Could not unprepare a departed body: " + Unwrap(ex).Message); }
                         Destroy(body.gameObject);
                     }
                 }
                 clientPlayers.Remove(disconnectedPlayer);
+                CoopStaleBodyFix.RestoreLocalPlayer(true);
             }
 
             Type lobbyType = RequireType("LobbyHelper");

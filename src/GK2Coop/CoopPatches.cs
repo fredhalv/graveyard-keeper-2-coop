@@ -389,6 +389,7 @@ namespace GK2Coop
                             (networkPlayer == null ? "?" : Convert.ToString(CoopDiagnostics.GetMember(networkPlayer, "clientId"))) +
                             "; dataHash=" + (playerData == null ? 0 : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(playerData)) +
                             "; dataPosition=" + (playerData == null ? "?" : CoopDiagnostics.Format(CoopDiagnostics.ReadPositionValue(playerData))));
+                CoopStaleBodyFix.RestoreLocalPlayer(false);
             }
             catch (Exception ex)
             {
