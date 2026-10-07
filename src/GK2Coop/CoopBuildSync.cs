@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using BepInEx.Logging;
 using HarmonyLib;
 using Unity.Collections;
@@ -396,6 +398,7 @@ namespace GK2Coop
                     }
                 }
             }
+            SyncQualityRects(data, true);
             applied++;
             log.LogInfo("Build sync: built " + CoopDiagnostics.GetMember(data, "id") + " " + Short(id) + " as another player did.");
             return data;
@@ -428,10 +431,96 @@ namespace GK2Coop
             {
                 return;
             }
+            SyncQualityRects(data, false);
             object world = WorldData();
             world.GetType().GetMethod("RemoveWgoDataFromGameScene", new[] { Plugin.FindGameType("WgoData"), typeof(bool) }).Invoke(world, new[] { data, (object)true });
             applied++;
             log.LogInfo("Build sync: removed " + Short(id) + " as another player did.");
+        }
+
+        // ------------------------------------------------------------------ quality areas
+        // A graveyard module's after-build expression registers its area with the graveyard zone
+        // (AddCustomRectToWZ); only graves inside a registered area count toward the zone's quality.
+        // That changes the zone, not the object, so a module mirrored from another player came
+        // without its area and its graves never counted here. The area call alone is run again —
+        // not the whole expression, whose other effects the object already carries.
+
+        private static readonly Regex AddRectCall = new Regex(@"AddCustomRectToWZ\([^()]*\)");
+        private static int repairedGeneration = -1;
+
+        /// <summary>
+        /// Registers (or unregisters) the quality areas of one building. Removes first:
+        /// <c>AddCustomQualityRect</c> is not idempotent and would count the area's graves twice.
+        /// </summary>
+        internal static int SyncQualityRects(object wgoData, bool add)
+        {
+            if (!(wgoData is WgoData data) || data.Definition == null || !data.Definition.TryGetBuildingDefForWgo(out BuildingDef def))
+            {
+                return 0;
+            }
+            int calls = 0;
+            foreach (LazyExpression expression in def.expressionAfterBuilding)
+            {
+                string raw = expression?.GetRawExpressionString();
+                if (string.IsNullOrEmpty(raw))
+                {
+                    continue;
+                }
+                foreach (Match call in AddRectCall.Matches(raw))
+                {
+                    string addCall = call.Value;
+                    new LazyExpression(addCall.Replace("AddCustomRectToWZ", "RemoveCustomRectFromWZ")).EvaluateBool(data);
+                    if (add)
+                    {
+                        new LazyExpression(addCall).EvaluateBool(data);
+                    }
+                    calls++;
+                }
+            }
+            return calls;
+        }
+
+        /// <summary>
+        /// Once per hosted session, when the world is loaded: registers the areas that modules built
+        /// by other players in earlier sessions never got on this machine. Saves from before this
+        /// fix carry such modules; areas that are already there are left as they are.
+        /// </summary>
+        internal static void TickRepairQualityRects(int generation)
+        {
+            if (!Enabled || repairedGeneration == generation)
+            {
+                return;
+            }
+            MainGame mainGame = MainGame.Instance;
+            List<GameSceneData> scenes = mainGame?.GameSave?.worldData?.gameSceneDataList;
+            if (mainGame == null || mainGame.gameState != MainGame.GameState.InGame || scenes == null || scenes.Count == 0)
+            {
+                return;
+            }
+            repairedGeneration = generation;
+            int buildings = 0;
+            try
+            {
+                foreach (GameSceneData scene in scenes)
+                {
+                    if (scene?.wgoDataList == null)
+                    {
+                        continue;
+                    }
+                    foreach (WgoData wgo in scene.wgoDataList.ToArray())
+                    {
+                        if (SyncQualityRects(wgo, true) > 0)
+                        {
+                            buildings++;
+                        }
+                    }
+                }
+                log.LogInfo("Build sync: registered the quality areas of " + buildings + " buildings.");
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning("Build sync: could not register quality areas: " + Inner(ex).Message);
+            }
         }
 
         // ------------------------------------------------------------------ helpers

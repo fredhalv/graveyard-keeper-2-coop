@@ -105,6 +105,10 @@ namespace GK2Coop
             CoopRole now = ReadRole();
             if (now == role)
             {
+                if (role == CoopRole.Host)
+                {
+                    CoopBuildSync.TickRepairQualityRects(Generation);
+                }
                 return;
             }
             if (role != CoopRole.None)
