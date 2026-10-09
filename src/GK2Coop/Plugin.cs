@@ -21,7 +21,7 @@ namespace GK2Coop
     {
         public const string Id = "com.fabio.gk2coop";
         public const string Name = "Graveyard Keeper 2 Co-op Prototype";
-        public const string Version = "0.65.7-fork.1";
+        public const string Version = "0.65.7.1"; // 4th number = our fork build; BepInEx needs a numeric version
 
         private ConfigEntry<KeyCode> overlayKey;
         private ConfigEntry<string> defaultAddress;

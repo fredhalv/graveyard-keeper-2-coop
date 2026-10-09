@@ -7,7 +7,7 @@
     <RootNamespace>GK2Coop</RootNamespace>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <!-- Keep in step with Plugin.Version so a deployed DLL can be identified without hashing. -->
-    <Version>0.65.7-fork.1</Version>
+    <Version>0.65.7.1</Version>
     <GamePath Condition="'$(GamePath)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Graveyard Keeper 2</GamePath>
     <GameDataName Condition="'$(GameDataName)' == '' and Exists('$(GamePath)\GraveyardKeeper2_Data')">GraveyardKeeper2_Data</GameDataName>
     <GameDataName Condition="'$(GameDataName)' == '' and Exists('$(GamePath)\GraveyardKeeper2Demo_Data')">GraveyardKeeper2Demo_Data</GameDataName>
